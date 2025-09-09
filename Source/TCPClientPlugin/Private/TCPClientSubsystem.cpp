@@ -2,7 +2,6 @@
 
 #include "TCPClientSubsystem.h"
 #include "TCPClientController.h"
-#include "IPAddressAsyncResolve.h"
 #include "SocketSubsystem.h"
 #include "Async/Async.h"
 #include "Kismet/GameplayStatics.h"
@@ -185,50 +184,51 @@ void UTCPClientSubsystem::GetDomainIpAddress(const FString& URL, TFunction<void(
     */
     float timeOut = 10.0f;
     Async(EAsyncExecution::ThreadPool,
-        [this, URL, timeOut, OnComplete]()
+        [URL, OnComplete]()
         {
-            ISocketSubsystem* const SocketSubSystem = ISocketSubsystem::Get();
-            auto ResolveInfo = SocketSubSystem->GetHostByName(TCHAR_TO_ANSI(*URL));
-            if (ensure(SocketSubSystem))
+            ISocketSubsystem* const SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
+            if (!SocketSubsystem)
             {
-                float elapsedTime = 0;
-                while (!ResolveInfo->IsComplete() && elapsedTime < timeOut)
-                {
-                    FPlatformProcess::Sleep(0.05);
-                    elapsedTime += 0.05f;
-                }
+                AsyncTask(ENamedThreads::GameThread, [OnComplete]()
+                    {
+                        OnComplete(FString(), false);
+                    });
+                return;
+            }
 
-                if (ResolveInfo->IsComplete() && ResolveInfo->GetErrorCode() == 0)
-                {
-                    const FInternetAddr* Addr = &ResolveInfo->GetResolvedAddress();
-                    uint32 OutIP = 0;
-                    Addr->GetIp(OutIP);
+            // Neue API ab UE5.1
+            FAddressInfoResult Result = SocketSubsystem->GetAddressInfo(
+                *URL,
+                nullptr,                          // kein ServiceName → nur Hostauflösung
+                EAddressInfoFlags::Default,
+                NAME_None                         // kein spezifisches Protokoll
+            );
 
-                    UE_LOG(LogTemp, Warning, TEXT("Found IP address for URL <%s>: %d.%d.%d.%d")
-                        , *URL, 0xff & (OutIP >> 24), 0xff & (OutIP >> 16), 0xff & (OutIP >> 8), 0xff & OutIP);
+            if (Result.Results.Num() > 0)
+            {
+                // Nimm die erste Adresse
+                TSharedRef<FInternetAddr> Addr = Result.Results[0].Address;
 
-                    FString IpString = Addr->ToString(false);
-                    AsyncTask(ENamedThreads::GameThread,
-                        [IpString, OnComplete]()
-                        {
+                FString IpString = Addr->ToString(false);
 
-                            OnComplete(IpString, true);
-                        }
-                    );
-                }
-                else
-                {
-                    AsyncTask(ENamedThreads::GameThread,
-                        [OnComplete]()
-                        {
-                            OnComplete(FString(), false);
-                        }
-                    );
-                }
+                UE_LOG(LogTemp, Warning, TEXT("Found IP address for URL <%s>: %s"), *URL, *IpString);
+
+                AsyncTask(ENamedThreads::GameThread, [IpString, OnComplete]()
+                    {
+                        OnComplete(IpString, true);
+                    });
+            }
+            else
+            {
+                AsyncTask(ENamedThreads::GameThread, [OnComplete]()
+                    {
+                        OnComplete(FString(), false);
+                    });
             }
         }
     );
 }
+
 
 void UTCPClientSubsystem::Tick(float DeltaTime)
 {
@@ -242,7 +242,7 @@ void UTCPClientSubsystem::Tick(float DeltaTime)
 
         controller->CheckMessage();
         break;
-        
+
     }
 }
 
@@ -266,6 +266,6 @@ bool UTCPClientSubsystem::IsTickable() const
 {
     if (IsTemplate())
         return false;
-    
+
     return true;
 }

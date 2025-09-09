@@ -1,16 +1,16 @@
-// Copyright 2022. Elogen Co. All Rights Reserved.
-
 #include "TCPSendPacketBase.h"
-#include "Templates/SubclassOf.h"
 
 void UTCPSendPacketBase::ConvertToBytes(TCPBufferWriter& writer)
 {
-	BufferWriter = &writer;
-	ConvertToBytesBP();
+    BufferWriter = &writer;
+    ConvertToBytesBP();
 }
 
 UTCPSendPacketBase* UTCPSendPacketBase::CreateSendPacketBP(TSubclassOf<UTCPSendPacketBase> packet)
 {
-	UTCPSendPacketBase* newObject = NewObject<UTCPSendPacketBase>(GetTransientPackage(), packet);
-	return newObject;
+    if (!*packet) return nullptr; // Prüfen, ob Subclass gültig
+
+    // packet.Get() liefert den UClass*, korrekt für NewObject
+    UTCPSendPacketBase* newObject = NewObject<UTCPSendPacketBase>(GetTransientPackage(), packet.Get());
+    return newObject;
 }
