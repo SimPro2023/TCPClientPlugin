@@ -182,7 +182,6 @@ void UTCPClientSubsystem::GetDomainIpAddress(const FString& URL, TFunction<void(
     /* code by -Kmack-
     * https://forums.unrealengine.com/t/how-to-get-host-by-name/296044/8
     */
-    float timeOut = 10.0f;
     Async(EAsyncExecution::ThreadPool,
         [URL, OnComplete]()
         {
