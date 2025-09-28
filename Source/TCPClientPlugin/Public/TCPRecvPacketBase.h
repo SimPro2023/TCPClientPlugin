@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "UObject/NoExportTypes.h"
 #include "UObject/Class.h"
+#include "UObject/Object.h"
 #include "TCPBufferReader.h"
 
 

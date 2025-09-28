@@ -124,7 +124,7 @@ void TCPClientController::RecvCallback(FAsyncResultRef result)
 
 	if (bytesTransferred > 0)
 	{
-		if (false == RecvBuff->OnWrite(bytesTransferred)) //Wirte Byte ¾ÕÀ¸·Î ÀÌµ¿
+		if (false == RecvBuff->OnWrite(bytesTransferred)) //Wirte Byte ì•ìœ¼ë¡œ ì´ë™
 		{
 			Disconnect("OnWrite Overflow", false);
 			return;
