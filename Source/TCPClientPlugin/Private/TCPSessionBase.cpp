@@ -251,8 +251,7 @@ void UTCPSessionBase::RecvMessageCallback(FByteArrayRef& messageByte)
     // ----- 5. Dispatch OnRecv safely on GameThread (with safety checks) -----
     // Use a weak pointer to avoid calling into a destroyed UObject
     TWeakObjectPtr<UTCPSessionBase> WeakThis(this);
-    AsyncTask(ENamedThreads::GameThread, [WeakThis, protocolId, payloadData = MoveTemp(payloadData)]()
-        {
+   
             if (!WeakThis.IsValid())
             {
                 // Session destroyed before we could run on GameThread -> ignore
@@ -268,7 +267,7 @@ void UTCPSessionBase::RecvMessageCallback(FByteArrayRef& messageByte)
 
             // Now safe to call OnRecv on the GameThread and guaranteed payloadData lives until here
             WeakThis->OnRecv(protocolId, reader);
-        });
+        
 }
 
 void UTCPSessionBase::SendMessageCallback(FByteArrayRef& messageByte)
