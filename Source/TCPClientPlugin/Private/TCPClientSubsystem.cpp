@@ -8,7 +8,6 @@
 
 void UTCPClientSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
-    
 }
 
 void UTCPClientSubsystem::Deinitialize()
@@ -25,6 +24,7 @@ UTCPSessionBase* UTCPClientSubsystem::ConnectSession(TSubclassOf<UTCPSessionBase
     if (session == nullptr)
     {
         UE_LOG(LogTemp, Warning, TEXT("TCPClientSubSystem[StartSession Fail] : Input session is null.."));
+        return nullptr;
     }
 
     UTCPSessionBase* newSession = NewObject<UTCPSessionBase>(this, session, TEXT("TCPSession"));
@@ -34,37 +34,36 @@ UTCPSessionBase* UTCPClientSubsystem::ConnectSession(TSubclassOf<UTCPSessionBase
     TCPClientController* controller = new TCPClientController();
     controller->SetSession(newSession);
     newSession->SetController(controller);
+
+    // Lambda-basiert für GameThread-Sicherheit
     newSession->OnConnected.BindLambda(
-    [this](const FString& SessionName, bool bSuccess)
+        [this](const FString& SessionName, bool bSuccess)
         {
-        AsyncTask(ENamedThreads::GameThread, [this, SessionName, bSuccess]()
-           {
-               if (IsValid(this))
-               {
-                   ConnectedCallback(SessionName, bSuccess);
-               }
-           });
-       }
-    );
-    newSession->OnDisconnected.BindLambda(
-    [this](const FString& SessionName, bool bNormalShutdown)
-       {
-           // Diese Lambda läuft evtl. auf einem Worker-Thread
-            AsyncTask(ENamedThreads::GameThread,
-               [this, SessionName, bNormalShutdown]()
-                {
+            AsyncTask(ENamedThreads::GameThread, [this, SessionName, bSuccess]()
+            {
                 if (IsValid(this))
-                   {
-                       DisConnectedCallback(SessionName, bNormalShutdown);
-                   }
-               }
-            );
+                {
+                    ConnectedCallback(SessionName, bSuccess);
+                }
+            });
         }
     );
 
+    newSession->OnDisconnected.BindLambda(
+        [this](const FString& SessionName, bool bNormalShutdown)
+        {
+            AsyncTask(ENamedThreads::GameThread, [this, SessionName, bNormalShutdown]()
+            {
+                if (IsValid(this))
+                {
+                    DisConnectedCallback(SessionName, bNormalShutdown);
+                }
+            });
+        }
+    );
 
     newSession->OnStart();
-    
+
     if (newSession->DNS)
     {
         GetDomainIpAddress(newSession->GetIp(),
@@ -74,23 +73,28 @@ UTCPSessionBase* UTCPClientSubsystem::ConnectSession(TSubclassOf<UTCPSessionBase
                     newSession->GetController()->StartConnect(ip, newSession->GetPort());
                 else
                 {
-                    UE_LOG(LogTemp, Error, TEXT("Failed to resolve the DNS address"))
+                    UE_LOG(LogTemp, Error, TEXT("Failed to resolve the DNS address"));
                     ConnectedCallback(newSession->GetName(), false);
                 }
             }
         );
     }
     else
+    {
         newSession->GetController()->StartConnect(newSession->GetIp(), newSession->GetPort());
-   
+    }
+
     return newSession;
 }
 
-UTCPSessionBase* UTCPClientSubsystem::ConnectSession(TSubclassOf<UTCPSessionBase> session, const FConnectedSessionDelegate& connectDelegate, const FDisconnectedSessionDelegate& disconnectDelegate)
+UTCPSessionBase* UTCPClientSubsystem::ConnectSession(TSubclassOf<UTCPSessionBase> session,
+                                                     const FConnectedSessionDelegate& connectDelegate,
+                                                     const FDisconnectedSessionDelegate& disconnectDelegate)
 {
     if (session == nullptr)
     {
         UE_LOG(LogTemp, Warning, TEXT("TCPClientSubSystem[StartSession Fail] : Input session is null.."));
+        return nullptr;
     }
 
     const FString& sessionName = session.GetDefaultObject()->GetName();
@@ -123,16 +127,19 @@ void UTCPClientSubsystem::DisconnectSessionByName(const FString& sessionName)
     {
         UTCPSessionBase* Session = Sessions[sessionName];
         TCPClientController* controller = Session->GetController();
-        
+
         if (Session->IsConnected())
         {
             controller->Disconnect(FString("Shutdown Manually"), true);
         }
-        
+
         Sessions.Remove(sessionName);
         DeleteController(controller);
+
+        // Delegates sicher entbinden
         Session->OnConnected.Unbind();
         Session->OnDisconnected.Unbind();
+
         Session->OnDestroy();
     }
 }
@@ -173,43 +180,33 @@ void UTCPClientSubsystem::ConnectedCallback(const FString& sessionName, bool suc
     if (!Sessions.Contains(sessionName))
         return;
 
-    if (OnConnected.IsBound())
+    AsyncTask(ENamedThreads::GameThread, [this, sessionName, success]()
     {
+        if (!IsValid(this)) return;
+
+        UE_LOG(LogTemp, Log, TEXT("TCP Connected: %s"), *sessionName);
+
         OnConnected.Broadcast(sessionName, success, Sessions[sessionName]);
-        if (RegisteredConnectDelegates.Find(sessionName))
-        {
-            auto& registedDelegate = RegisteredConnectDelegates[sessionName];
-            OnConnected.Remove(*registedDelegate);
-            RegisteredConnectDelegates.Remove(sessionName);
-        }
-    }
+    });
 }
 
 void UTCPClientSubsystem::DisConnectedCallback(const FString& sessionName, bool normalShutdown)
 {
-	check(IsInGameThread()); // <-- NEU, extrem wichtig
     if (!Sessions.Contains(sessionName))
         return;
 
-    auto session = Sessions[sessionName];
-    
-    if (OnDisconnected.IsBound())
+    AsyncTask(ENamedThreads::GameThread, [this, sessionName, normalShutdown]()
     {
+        if (!IsValid(this)) return;
+
+        UE_LOG(LogTemp, Warning, TEXT("TCP Disconnected: %s"), *sessionName);
+
         OnDisconnected.Broadcast(sessionName, normalShutdown);
-        if (RegisteredDisconnectDelegates.Find(sessionName))
-        {
-            auto& registedDelegate = RegisteredDisconnectDelegates[sessionName];
-            OnDisconnected.Remove(*registedDelegate);
-            RegisteredDisconnectDelegates.Remove(sessionName);
-        }
-    }
+    });
 }
 
 void UTCPClientSubsystem::GetDomainIpAddress(const FString& URL, TFunction<void(FString, bool)> OnComplete)
 {
-    /* code by -Kmack-
-    * https://forums.unrealengine.com/t/how-to-get-host-by-name/296044/8
-    */
     Async(EAsyncExecution::ThreadPool,
         [URL, OnComplete]()
         {
@@ -217,49 +214,44 @@ void UTCPClientSubsystem::GetDomainIpAddress(const FString& URL, TFunction<void(
             if (!SocketSubsystem)
             {
                 AsyncTask(ENamedThreads::GameThread, [OnComplete]()
-                    {
-                        OnComplete(FString(), false);
-                    });
+                {
+                    OnComplete(FString(), false);
+                });
                 return;
             }
 
-            // Neue API ab UE5.1
             FAddressInfoResult Result = SocketSubsystem->GetAddressInfo(
                 *URL,
-                nullptr,                          // kein ServiceName → nur Hostauflösung
+                nullptr,
                 EAddressInfoFlags::Default,
-                NAME_None                         // kein spezifisches Protokoll
+                NAME_None
             );
 
             if (Result.Results.Num() > 0)
             {
-                // Nimm die erste Adresse
                 TSharedRef<FInternetAddr> Addr = Result.Results[0].Address;
-
                 FString IpString = Addr->ToString(false);
 
                 UE_LOG(LogTemp, Warning, TEXT("Found IP address for URL <%s>: %s"), *URL, *IpString);
 
                 AsyncTask(ENamedThreads::GameThread, [IpString, OnComplete]()
-                    {
-                        OnComplete(IpString, true);
-                    });
+                {
+                    OnComplete(IpString, true);
+                });
             }
             else
             {
                 AsyncTask(ENamedThreads::GameThread, [OnComplete]()
-                    {
-                        OnComplete(FString(), false);
-                    });
+                {
+                    OnComplete(FString(), false);
+                });
             }
         }
     );
 }
 
-
 void UTCPClientSubsystem::Tick(float DeltaTime)
 {
-
     for (auto& kvp : Sessions)
     {
         UTCPSessionBase* session = kvp.Value;
@@ -269,7 +261,6 @@ void UTCPClientSubsystem::Tick(float DeltaTime)
 
         controller->CheckMessage();
         break;
-
     }
 }
 
@@ -280,7 +271,6 @@ bool UTCPClientSubsystem::IsAllowedToTick() const
 
 ETickableTickType UTCPClientSubsystem::GetTickableTickType() const
 {
-    //{ return ETickableTickType::Always; }
     return IsTemplate() ? ETickableTickType::Never : FTickableGameObject::GetTickableTickType();
 }
 
@@ -291,8 +281,5 @@ TStatId UTCPClientSubsystem::GetStatId() const
 
 bool UTCPClientSubsystem::IsTickable() const
 {
-    if (IsTemplate())
-        return false;
-
-    return true;
+    return !IsTemplate();
 }
