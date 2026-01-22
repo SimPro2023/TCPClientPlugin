@@ -34,8 +34,35 @@ UTCPSessionBase* UTCPClientSubsystem::ConnectSession(TSubclassOf<UTCPSessionBase
     TCPClientController* controller = new TCPClientController();
     controller->SetSession(newSession);
     newSession->SetController(controller);
-    newSession->OnConnected.BindUFunction(this, FName("ConnectedCallback"));
-    newSession->OnDisconnected.BindUFunction(this, FName("DisConnectedCallback"));
+    newSession->OnConnected.BindLambda(
+    [this](const FString& SessionName, bool bSuccess)
+        {
+        AsyncTask(ENamedThreads::GameThread, [this, SessionName, bSuccess]()
+           {
+               if (IsValid(this))
+               {
+                   ConnectedCallback(SessionName, bSuccess);
+               }
+           });
+       }
+    );
+    newSession->OnDisconnected.BindLambda(
+    [this](const FString& SessionName, bool bNormalShutdown)
+       {
+           // Diese Lambda läuft evtl. auf einem Worker-Thread
+            AsyncTask(ENamedThreads::GameThread,
+               [this, SessionName, bNormalShutdown]()
+                {
+                if (IsValid(this))
+                   {
+                       DisConnectedCallback(SessionName, bNormalShutdown);
+                   }
+               }
+            );
+        }
+    );
+
+
     newSession->OnStart();
     
     if (newSession->DNS)
@@ -160,6 +187,7 @@ void UTCPClientSubsystem::ConnectedCallback(const FString& sessionName, bool suc
 
 void UTCPClientSubsystem::DisConnectedCallback(const FString& sessionName, bool normalShutdown)
 {
+	check(IsInGameThread()); // <-- NEU, extrem wichtig
     if (!Sessions.Contains(sessionName))
         return;
 
